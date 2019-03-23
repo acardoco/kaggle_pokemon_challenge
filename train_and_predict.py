@@ -1,15 +1,14 @@
 import numpy as np
 import pandas as pd
-
+from sklearn import metrics
 from sklearn import preprocessing
+from sklearn import svm
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn import svm
-from sklearn import metrics
 
-n_test= 49999
-fichero = 'datos.txt'
-tests = 'test.txt'
+n_test= 40000
+fichero = 'datos.csv'
+tests = 'entrega_para_predecir.csv'
 resultados_finales = 'resultados_finales/test.csv'
 sample = 'resultados_finales/sampleSubmission.csv'
 path_dir = 'pokemon-challenge-mlh/'
@@ -45,12 +44,15 @@ def get_data():
     df_pokemon['Type 2'] = encoding2
     df_pokemon['Name'] = encodingName
 
+    # creando nuevas columnas
+    #df_pokemon['Sumatorio_stats'] = df_pokemon[['HP','Attack','Defense','Sp. Atk','Sp. Def','Speed']].sum(axis=1)
+
     print(df_pokemon.head())
     #-------battles.csv
     df_battles = pd.read_csv(path_dir + 'battles.csv')
     # quitamos el numero de batalla
     df_battles = df_battles[['First_pokemon','Second_pokemon', 'Winner']]
-    print(df_battles.head())
+    print(df_battles.columns)
     #-------test.csv
     df_test = pd.read_csv(path_dir + 'test.csv')
 
@@ -62,16 +64,52 @@ def get_data():
 def juntar_csvs():
     df_pokemon, df_battles, df_test = get_data()
 
-    lista = []
-    i = 0
-    for batalla in df_battles.values:
+    #vectorizacion
+    pokemon_values = df_pokemon.values #(800, 12)
+    battles_values = df_battles.values #(50000, 3)
+    
+    ids_pokemon = pokemon_values[:,0]
+    # obtenemos valores unicos y los indices inversos para luego reconstruir el array original
+    ids_pok1, inv1 = np.unique(battles_values[:, 0], return_inverse=True)
+    ids_pok2, inv2 = np.unique(battles_values[:, 1], return_inverse=True)
+    resultados_batallas = battles_values[:, 2]
+
+    # buscamos donde estan las caracteristicas de cada pokemon en las batallas
+    indices1 = np.intersect1d(ids_pok1, ids_pokemon, return_indices=True)
+    indices2 = np.intersect1d(ids_pok2, ids_pokemon, return_indices=True)
+
+    # asignamos las caracteristicas
+    vals_pok1 = pokemon_values[indices1[2], 1:]
+    vals_pok2 = pokemon_values[indices2[2], 1:]
+
+    # y reconstruimos el array original
+    lon_values = len(battles_values)
+    # (50000, 11) cada uno
+    pok1 = vals_pok1[inv1]
+    pok2 = vals_pok2[inv2]
+    columnas = pok2.shape[1] * 2
+
+    # aqui juntamos el resto para crear el dataset con el que entrenar
+    juntar_carac = np.concatenate((pok1, pok2), axis=1)
+    caracteristicas_y_resultados = np.ones((lon_values, columnas + 1)) # (50000, 23)
+    caracteristicas_y_resultados[:,:-1] = juntar_carac
+    caracteristicas_y_resultados[:,-1] = resultados_batallas
+
+    # ids contrincante 1, ids contrincante 2 y el que golpea primero (añadido)
+    valores = np.array((battles_values[:, 0], battles_values[:, 1], battles_values[:, 0])) #(3, 50000)
+    valores = valores.T #(50000, 3)
+
+    lista = np.concatenate((valores, caracteristicas_y_resultados), axis=1)
+
+    '''for batalla in df_battles.values:
         for pokemon in df_pokemon.values:
             if batalla[0] == pokemon[0]:
                 fila1 = pokemon[1:]
             if batalla[1] == pokemon[0]:
                 fila2 = pokemon[1:]
 
-        ids = np.array([batalla[0], batalla[1]])
+        primer_golpe = batalla[0]
+        ids = np.array([batalla[0], batalla[1], primer_golpe])
         filas = np.concatenate((fila1, fila2), axis=0)
         primera_juntanza = np.concatenate((ids, filas), axis=0)
         lista_final = np.append(primera_juntanza, batalla[2])
@@ -80,11 +118,14 @@ def juntar_csvs():
         i += 1
         if i % 100 == 0:
             print(i)
-
+    
     lista = np.asarray(lista)
-    print(lista.shape)
+    '''
+    lista = lista.astype(int)
     # guardo el fichero
-    np.savetxt(fichero, lista)
+    df_lista = pd.DataFrame(lista)
+    df_lista.to_csv(fichero, index=False)
+    #np.savetxt(fichero, lista)
 
     return lista
 # ----------------------------------------------------------------------------------------------------------------------
@@ -92,29 +133,44 @@ def juntar_csvs():
 def preparar_test():
     df_pokemon, df_battles, df_test = get_data()
 
-    lista = []
-    i = 0
-    for batalla in df_test.values:
-        for pokemon in df_pokemon.values:
-            if batalla[1] == pokemon[0]:
-                fila1 = pokemon[1:]
-            if batalla[2] == pokemon[0]:
-                fila2 = pokemon[1:]
+    # vectorizacion
+    pokemon_values = df_pokemon.values  # (800, 12)
+    tests_values = df_test.values  # (10000, 3)
 
-        ids = np.array([batalla[1], batalla[2]])
-        filas = np.concatenate((fila1, fila2), axis=0)
-        lista_final = np.concatenate((ids, filas), axis=0)
-        #lista_final = np.append(primera_juntanza, batalla[2])
-        lista.append(lista_final)
+    ids_pokemon = pokemon_values[:, 0]
+    # obtenemos valores unicos y los indices inversos para luego reconstruir el array original
+    ids_pok1, inv1 = np.unique(tests_values[:, 1], return_inverse=True)
+    ids_pok2, inv2 = np.unique(tests_values[:, 2], return_inverse=True)
 
-        i += 1
-        if i % 100 == 0:
-            print(i)
+    # buscamos donde estan las caracteristicas de cada pokemon en las batallas
+    indices1 = np.intersect1d(ids_pok1, ids_pokemon, return_indices=True)
+    indices2 = np.intersect1d(ids_pok2, ids_pokemon, return_indices=True)
 
-    lista = np.asarray(lista)
+    # asignamos las caracteristicas
+    vals_pok1 = pokemon_values[indices1[2], 1:]
+    vals_pok2 = pokemon_values[indices2[2], 1:]
+
+    # y reconstruimos el array original
+    lon_values = len(tests_values)
+    # (10000, 11) cada uno
+    pok1 = vals_pok1[inv1]
+    pok2 = vals_pok2[inv2]
+    columnas = pok2.shape[1] * 2
+
+    # aqui juntamos el resto para crear el dataset con el que entrenar
+    juntar_carac = np.concatenate((pok1, pok2), axis=1)
+
+    # ids contrincante 1, ids contrincante 2 y el que golpea primero (añadido)
+    valores = np.array((tests_values[:, 1], tests_values[:, 2], tests_values[:, 1]))  # (3, 10000)
+    valores = valores.T  # (10000, 3)
+
+    lista = np.concatenate((valores, juntar_carac), axis=1)
+    lista = lista.astype(int)
     print(lista.shape)
     # guardo el fichero
-    np.savetxt(tests, lista)
+    df_lista = pd.DataFrame(lista)
+    df_lista.to_csv(tests, index=False)
+
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------MODELO EMPLEADOS--------------------------------------------------
@@ -129,7 +185,8 @@ def random_forest(train_x, train_y, test_x, test_y):
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 def MLP(train_x, train_y, test_x, test_y):
-    clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(5, 2), random_state=1)
+    clf = MLPClassifier(solver='lbfgs', alpha=1e-7
+                        , hidden_layer_sizes=(4, 10), random_state=1, activation='logistic') # (4,10), logistic, 1e-7
     clf.fit(train_x, train_y)
 
     y_pred=clf.predict(test_x)
@@ -137,35 +194,13 @@ def MLP(train_x, train_y, test_x, test_y):
 
     return clf
 # ----------------------------------------------------------------------------------------------------------------------
-# ----------------------------------------------------------------------------------------------------------------------
-def SVM(train_x, train_y, test_x, test_y):
-    clf = svm.SVC(gamma='scala')
-    clf.fit(train_x, train_y)
-
-    y_pred=clf.predict(test_x)
-    print("Accuracy SVM:",metrics.accuracy_score(test_y, y_pred))
-
-    return clf
-# ----------------------------------------------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------RESULTADOS--------------------------------------------------
-def solo_battles():
-    df_pokemon, df_battles, df_test = get_data()
-    # vamos a juntar ambos ficheros en uno para entrenar conjuntamente
-    df_a_entrenar = df_battles[['First_pokemon','Second_pokemon', 'Winner']]
-    X = df_a_entrenar[['First_pokemon','Second_pokemon']].values
-    y = df_a_entrenar['Winner'].values
-    train_x,train_y = X[:n_test], y[:n_test]
-    test_x, test_y = X[n_test:], y[n_test:]
-
-    rf = random_forest(train_x, train_y, test_x, test_y)
-    mlp = MLP(train_x, train_y, test_x, test_y)
-    #svm = SVM(train_x, train_y, test_x, test_y)
 # ----------------------------------------------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------------------------------
 def agrupados():
 
-    lista = np.loadtxt(fichero)
+    lista = pd.read_csv(fichero).values
 
     print(lista.shape)
 
@@ -179,14 +214,14 @@ def agrupados():
     mlp = MLP(train_x, train_y, test_x, test_y)
     #svm = SVM(train_x, train_y, test_x, test_y)
 
-    return mlp
+    return rf
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 # ------------------------------------------guardar datos finales-------------------------------------------------------
 def resultado_final():
 
-    lista = np.loadtxt(tests)
+    lista = pd.read_csv(tests).values
     print(lista.shape)
 
     clf = agrupados()
@@ -203,7 +238,7 @@ def resultado_final():
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 # solo_battles()
-#juntar_csvs()
+juntar_csvs()
 #preparar_test()
-#agrupados()
-resultado_final()
+agrupados()
+#resultado_final()
