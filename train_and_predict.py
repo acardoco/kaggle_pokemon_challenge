@@ -2,11 +2,12 @@ import numpy as np
 import pandas as pd
 from sklearn import metrics
 from sklearn import preprocessing
-from sklearn import svm
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.neural_network import MLPClassifier
 
-n_test= 40000
+import utils
+
+n_test= 45000
 fichero = 'datos.csv'
 tests = 'entrega_para_predecir.csv'
 resultados_finales = 'resultados_finales/test.csv'
@@ -19,7 +20,7 @@ def get_data():
 
     #-------pokemon.csv
     df_pokemon = pd.read_csv(path_dir + 'pokemon.csv')
-    df_pokemon = df_pokemon.fillna({'Name': 'Ninguno', 'Type 1': 'Ninguno', 'Type 2': 'Ninguno'})
+    df_pokemon = df_pokemon.fillna({'Name': 'None', 'Type 1': 'None', 'Type 2': 'None'})
     #df_pokemon = df_pokemon.dropna()
     #cambiando nombre de variable
     df_pokemon = df_pokemon.rename(index=str, columns={"#": "id_pokemon"})
@@ -56,13 +57,13 @@ def get_data():
     #-------test.csv
     df_test = pd.read_csv(path_dir + 'test.csv')
 
-    return df_pokemon, df_battles, df_test
+    return df_pokemon, df_battles, df_test, le1, le2, lename
 
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 def juntar_csvs():
-    df_pokemon, df_battles, df_test = get_data()
+    df_pokemon, df_battles, df_test, le1, le2, lename = get_data()
 
     #vectorizacion
     pokemon_values = df_pokemon.values #(800, 12)
@@ -87,11 +88,19 @@ def juntar_csvs():
     # (50000, 11) cada uno
     pok1 = vals_pok1[inv1]
     pok2 = vals_pok2[inv2]
-    columnas = pok2.shape[1] * 2
+    #columnas = pok2.shape[1] * 2
+    columnas = pok2.shape[1] + 3 #+3 por el name, type1 y type2
+
+    # aplicamos diff
+    pok_final = np.ones((lon_values, columnas))
+    pok_final[:, :3] = pok1[:, :3]
+    pok_final[:, 3:6] = pok2[:, :3]
+    pok_final[:, 6:] = pok1[:, 3:] - pok2[:, 3:]
 
     # aqui juntamos el resto para crear el dataset con el que entrenar
-    juntar_carac = np.concatenate((pok1, pok2), axis=1)
-    caracteristicas_y_resultados = np.ones((lon_values, columnas + 1)) # (50000, 23)
+    #juntar_carac = np.concatenate((pok1, pok2), axis=1)
+    juntar_carac = pok_final
+    caracteristicas_y_resultados = np.ones((lon_values, columnas + 1)) # (50000, 15)
     caracteristicas_y_resultados[:,:-1] = juntar_carac
     caracteristicas_y_resultados[:,-1] = resultados_batallas
 
@@ -123,7 +132,43 @@ def juntar_csvs():
     '''
     lista = lista.astype(int)
     # guardo el fichero
-    df_lista = pd.DataFrame(lista)
+    df_lista = pd.DataFrame(lista, columns=['First_pokemon', 'Second_pokemon', 'id_primer_ataq',
+                                            'nombre1', 'tipo1_id1', 'tipo2_id1',
+                                            'nombre2', 'tipo1_id2', 'tipo2_id2',
+                                            'HP','Attack','Defense','Sp. Atk','Sp. Def','Speed',
+                                            'Generation', 'Legendary',
+                                            'Winner'])
+
+    # efectividad de las habilidades
+    # primero pasamos a las antiguas labels
+    df_lista['tipo1_id1'] = le1.inverse_transform(df_lista['tipo1_id1'])
+    df_lista['tipo2_id1'] = le2.inverse_transform(df_lista['tipo2_id1'])
+    df_lista['tipo1_id2'] = le1.inverse_transform(df_lista['tipo1_id2'])
+    df_lista['tipo2_id2'] = le2.inverse_transform(df_lista['tipo2_id2'])
+    df_lista['nombre1'] = lename.inverse_transform(df_lista['nombre1'])
+    df_lista['nombre2'] = lename.inverse_transform(df_lista['nombre2'])
+
+    # y luego aplicamos los valores
+    df_lista = utils.calculate_effectiveness(df_lista)
+
+    # reordenamos
+    cols = df_lista.columns.tolist()
+    winner_col = cols[-5]
+    cols = cols[:17] + cols[-4:]
+    cols.append(winner_col)
+    df_lista = df_lista[cols]
+
+    #y volvemos a aplicar los encodings
+    df_lista['tipo1_id1'] = le1.fit_transform(df_lista['tipo1_id1'])
+    df_lista['tipo2_id1'] = le2.fit_transform(df_lista['tipo2_id1'])
+    df_lista['tipo1_id2'] = le1.fit_transform(df_lista['tipo1_id2'])
+    df_lista['tipo2_id2'] = le2.fit_transform(df_lista['tipo2_id2'])
+    df_lista['nombre1'] = lename.fit_transform(df_lista['nombre1'])
+    df_lista['nombre2'] = lename.fit_transform(df_lista['nombre2'])
+
+    # elimino carac que aportan menos
+    df_lista = df_lista.drop(['Generation', 'Legendary'], axis=1)
+
     df_lista.to_csv(fichero, index=False)
     #np.savetxt(fichero, lista)
 
@@ -131,7 +176,7 @@ def juntar_csvs():
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 def preparar_test():
-    df_pokemon, df_battles, df_test = get_data()
+    df_pokemon, df_battles, df_test, le1, le2, lename = get_data()
 
     # vectorizacion
     pokemon_values = df_pokemon.values  # (800, 12)
@@ -155,10 +200,17 @@ def preparar_test():
     # (10000, 11) cada uno
     pok1 = vals_pok1[inv1]
     pok2 = vals_pok2[inv2]
-    columnas = pok2.shape[1] * 2
+    columnas = pok2.shape[1] + 3  # +3 por el name, type1 y type2
+
+    # aplicamos diff
+    pok_final = np.ones((lon_values, columnas))
+    pok_final[:, :3] = pok1[:, :3]
+    pok_final[:, 3:6] = pok2[:, :3]
+    pok_final[:, 6:] = pok1[:, 3:] - pok2[:, 3:]
 
     # aqui juntamos el resto para crear el dataset con el que entrenar
-    juntar_carac = np.concatenate((pok1, pok2), axis=1)
+    # juntar_carac = np.concatenate((pok1, pok2), axis=1)
+    juntar_carac = pok_final
 
     # ids contrincante 1, ids contrincante 2 y el que golpea primero (añadido)
     valores = np.array((tests_values[:, 1], tests_values[:, 2], tests_values[:, 1]))  # (3, 10000)
@@ -168,31 +220,81 @@ def preparar_test():
     lista = lista.astype(int)
     print(lista.shape)
     # guardo el fichero
-    df_lista = pd.DataFrame(lista)
+    df_lista = pd.DataFrame(lista, columns=['First_pokemon', 'Second_pokemon', 'id_primer_ataq',
+                                            'nombre1', 'tipo1_id1', 'tipo2_id1',
+                                            'nombre2', 'tipo1_id2', 'tipo2_id2',
+                                            'HP','Attack','Defense','Sp. Atk','Sp. Def','Speed',
+                                            'Generation', 'Legendary'])
+
+    # efectividad de las habilidades
+    # primero pasamos a las antiguas labels
+    df_lista['tipo1_id1'] = le1.inverse_transform(df_lista['tipo1_id1'])
+    df_lista['tipo2_id1'] = le2.inverse_transform(df_lista['tipo2_id1'])
+    df_lista['tipo1_id2'] = le1.inverse_transform(df_lista['tipo1_id2'])
+    df_lista['tipo2_id2'] = le2.inverse_transform(df_lista['tipo2_id2'])
+    df_lista['nombre1'] = lename.inverse_transform(df_lista['nombre1'])
+    df_lista['nombre2'] = lename.inverse_transform(df_lista['nombre2'])
+
+    # y luego aplicamos los valores
+    df_lista = utils.calculate_effectiveness(df_lista)
+
+    # y volvemos a aplicar los encodings
+    df_lista['tipo1_id1'] = le1.fit_transform(df_lista['tipo1_id1'])
+    df_lista['tipo2_id1'] = le2.fit_transform(df_lista['tipo2_id1'])
+    df_lista['tipo1_id2'] = le1.fit_transform(df_lista['tipo1_id2'])
+    df_lista['tipo2_id2'] = le2.fit_transform(df_lista['tipo2_id2'])
+    df_lista['nombre1'] = lename.fit_transform(df_lista['nombre1'])
+    df_lista['nombre2'] = lename.fit_transform(df_lista['nombre2'])
+
+    # elimino carac que aportan menos
+    df_lista = df_lista.drop(['Generation', 'Legendary'], axis=1)
+
     df_lista.to_csv(tests, index=False)
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------MODELO EMPLEADOS--------------------------------------------------
 def random_forest(train_x, train_y, test_x, test_y):
-    clf = RandomForestClassifier(n_estimators=100)
+
+    clf = RandomForestClassifier(n_estimators=150)
     clf.fit(train_x, train_y)
 
     y_pred=clf.predict(test_x)
+    print(clf.feature_importances_)
     print("Accuracy random forest:",metrics.accuracy_score(test_y, y_pred))
 
     return clf
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
-def MLP(train_x, train_y, test_x, test_y):
-    clf = MLPClassifier(solver='lbfgs', alpha=1e-7
-                        , hidden_layer_sizes=(4, 10), random_state=1, activation='logistic') # (4,10), logistic, 1e-7
-    clf.fit(train_x, train_y)
+def Voting(train_x, train_y, test_x, test_y):
 
-    y_pred=clf.predict(test_x)
-    print("Accuracy MLP:",metrics.accuracy_score(test_y, y_pred))
+    clf1 = RandomForestClassifier(n_estimators=150)
+    clf2 = RandomForestClassifier(n_estimators=100)
+    clf3 = MLPClassifier(solver='lbfgs', alpha=1e-5
+                         , hidden_layer_sizes=(10, 10), random_state=1, activation='logistic')
 
-    return clf
+    eclf = VotingClassifier(estimators=[('rf1', clf1), ('rf2', clf2), ('rf3', clf3)], voting='hard')
+
+    clf1 = clf1.fit(train_x, train_y)
+    clf2 = clf2.fit(train_x, train_y)
+    clf3 = clf3.fit(train_x, train_y)
+    eclf = eclf.fit(train_x, train_y)
+
+    y_pred1 = clf1.predict(test_x)
+    y_pred2 = clf2.predict(test_x)
+    y_pred3 = clf3.predict(test_x)
+    e_pred = eclf.predict(test_x)
+
+    print("Accuracy RandomForestClassifier 150:", metrics.accuracy_score(test_y, y_pred1))
+    print("Accuracy RandomForestClassifier 100:", metrics.accuracy_score(test_y, y_pred2))
+    print("Accuracy AdaBoostClassifier 100:", metrics.accuracy_score(test_y, y_pred3))
+    print("Accuracy VotingClassifier:", metrics.accuracy_score(test_y, e_pred))
+
+    return eclf
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+
+
 # ----------------------------------------------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------RESULTADOS--------------------------------------------------
@@ -211,7 +313,7 @@ def agrupados():
     test_x, test_y = X[n_test:], y[n_test:]
 
     rf = random_forest(train_x, train_y, test_x, test_y)
-    mlp = MLP(train_x, train_y, test_x, test_y)
+    #mlp = MLP(train_x, train_y, test_x, test_y)
     #svm = SVM(train_x, train_y, test_x, test_y)
 
     return rf
@@ -239,6 +341,6 @@ def resultado_final():
 # ----------------------------------------------------------------------------------------------------------------------
 # solo_battles()
 juntar_csvs()
-#preparar_test()
-agrupados()
-#resultado_final()
+preparar_test()
+#agrupados()
+resultado_final()
