@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-
+# via https://www.kaggle.com/terminus7/pokemon-challenge
 def calculate_effectiveness(data):
     '''
         this function creates a new column of each pokemon's effectiveness against it's enemy.
@@ -78,8 +78,10 @@ def calculate_effectiveness(data):
 
     p1_type1_list = []
     p1_type2_list = []
+    p1_max = []
     p2_type1_list = []
     p2_type2_list = []
+    p2_max = []
 
     for row in data.itertuples():
         nested_type = [[1, 1], [1, 1]]
@@ -108,8 +110,40 @@ def calculate_effectiveness(data):
         p1_type2_list.append(nested_type[0][1])
         p2_type1_list.append(nested_type[1][0])
         p2_type2_list.append(nested_type[1][1])
+        p1_max.append(np.maximum(nested_type[0][0], nested_type[0][1]))
+        p2_max.append(np.maximum(nested_type[1][0], nested_type[1][1]))
 
-    data = data.assign(P1_type1=p1_type1_list, P1_type2=p1_type2_list, P2_type1=p2_type1_list, P2_type2=p2_type2_list)
+    data = data.assign(P1_type1=p1_type1_list, P1_type2=p1_type2_list,
+                       P2_type1=p2_type1_list, P2_type2=p2_type2_list)
     #data = data.drop(['First_pokemon', 'Second_pokemon'], axis=1)
 
     return data
+
+# con esto no aportamos mucho al modelo asi que queda aqui, pero descartada de aplicar
+def get_winrate(df_pokemon, df_battles):
+
+    batallas = df_battles.values
+    pokemons = df_pokemon.values
+    id_pokemons = pokemons[:, 0]
+
+    won_battles = np.zeros((len(id_pokemons)))
+
+    for idx, id in enumerate(id_pokemons):
+        # first_pok, second_pok, winner [0 | 1]
+        total_battles = batallas[(batallas[:,0] == id) | (batallas[:,1] == id)]
+        izq_won = total_battles[(id == total_battles[:, 0]) &
+                                (total_battles[:, 2] == 0)]
+        der_won = total_battles[(id == total_battles[:, 1]) &
+                                (total_battles[:, 2] == 1)]
+        total_won = len(izq_won) + len(der_won)
+
+        # y calculamos el winrate
+        if len(total_battles) > 0 :
+            winrate = total_won/len(total_battles)
+
+        won_battles[idx] += winrate
+
+    # asignamos
+    df_pokemon['Winrate'] = won_battles
+
+    return df_pokemon
